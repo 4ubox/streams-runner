@@ -1,0 +1,68 @@
+name: Scrape Every 15 Minutes
+
+concurrency:
+  group: scrape-runner
+  cancel-in-progress: false
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MAIN_REPO: ${{ vars.MAIN_REPO }}
+  DIST_REPO: ${{ vars.DIST_REPO }}
+  MAIN_AUTH: ${{ secrets.MAIN_AUTH }}
+  DIST_AUTH: ${{ secrets.DIST_AUTH }}
+
+jobs:
+  clean:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm install @octokit/rest
+
+      - name: Run cleanup
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_FULL: ${{ github.repository }}
+          KEEP_LOGS_FOR_DAYS: -1
+        run: node .github/scripts/cleanup.js
+
+  scrape:
+    runs-on: ubuntu-latest
+    needs: clean
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: run scraper
+        run: |
+          bash .github/scripts/generate.sh
+
+  next_run:
+    runs-on: ubuntu-latest
+    needs: scrape
+    steps:
+      - name: Wait 15 minutes
+        run: sleep 900
+
+      - name: Trigger next run
+        if: success() && github.run_attempt == 1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          curl -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/scraper.yml/dispatches \
+            -d "{\"ref\":\"${{ github.ref_name }}\"}"
